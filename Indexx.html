@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>RentFlow Pro</title>
+
+  <!-- Libraries -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/chart.js/4.4.0/chart.umd.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+  <style>
+    body { margin:0; font-family:Segoe UI; display:flex; }
+
+    .sidebar {
+      width:220px;
+      background:#1e293b;
+      color:white;
+      height:100vh;
+      padding:20px;
+    }
+
+    .sidebar button {
+      width:100%;
+      margin:5px 0;
+      padding:10px;
+      background:none;
+      border:none;
+      color:white;
+      text-align:left;
+      cursor:pointer;
+    }
+
+    .main {
+      flex:1;
+      background:#f1f5f9;
+      padding:20px;
+    }
+
+    .dark .main { background:#0f172a; color:white; }
+    .dark .card { background:#1e293b; color:white; }
+
+    .card {
+      background:white;
+      padding:15px;
+      margin:10px 0;
+      border-radius:10px;
+    }
+
+    input, button {
+      padding:8px;
+      margin:5px;
+    }
+
+    button {
+      background:#2563eb;
+      color:white;
+      border:none;
+      cursor:pointer;
+    }
+  </style>
+</head>
+
+<body>
+
+<!-- ID PAGE -->
+<div id="idPage" class="card">
+  <h2>Create / Enter ID</h2>
+  <input id="userIdInput" placeholder="Enter ID"><br>
+  <button onclick="enterID()">Enter</button>
+  <button onclick="createID()">Create ID</button>
+  <p id="showID"></p>
+</div>
+
+<!-- APP -->
+<div id="app" style="display:none; width:100%;">
+
+<div class="sidebar">
+  <h3>RentFlow</h3>
+  <button onclick="showPage('dashboard')">Dashboard</button>
+  <button onclick="showPage('assets')">Assets</button>
+  <button onclick="showPage('receipts')">Receipts</button>
+  <button onclick="exportExcel()">Export Excel</button>
+  <button onclick="toggleDark()">Toggle Dark</button>
+  <button onclick="logout()">Change ID</button>
+</div>
+
+<div class="main">
+
+<!-- DASHBOARD -->
+<div id="dashboardPage">
+  <h2>Dashboard</h2>
+  <div class="card" id="totalIncome">₹0</div>
+  <canvas id="chart"></canvas>
+</div>
+
+<!-- ASSETS -->
+<div id="assetsPage" style="display:none;">
+  <h2>Assets</h2>
+
+  <div class="card">
+    <input id="assetName" placeholder="Asset">
+    <input id="tenantName" placeholder="Tenant">
+    <input id="amount" type="number" placeholder="Amount">
+    <button onclick="addAsset()">Add</button>
+  </div>
+
+  <div id="assets"></div>
+</div>
+
+<!-- RECEIPTS -->
+<div id="receiptsPage" style="display:none;">
+  <h2>Receipts</h2>
+
+  <div class="card">
+    <input id="searchTenant" placeholder="Search Tenant">
+    <input type="month" id="filterMonth">
+    <button onclick="filterReceipts()">Filter</button>
+  </div>
+
+  <div id="receipts"></div>
+</div>
+
+</div>
+</div>
+
+<script>
+
+const client = supabase.createClient("https://totqfbmmslrecekjatji.supabase.co","sb_publishable_AOV5VcRjdc7yTflaTjNM8g_TXvMjKsR");
+let currentUserId=null;
+
+// ID SYSTEM
+function createID(){
+  let id="user_"+Math.random().toString(36).substring(2,10);
+  currentUserId=id;
+  localStorage.setItem("userId",id);
+
+  showID.innerHTML=`Your ID: <b>${id}</b><br>
+  <button onclick="copyID()">Copy</button>
+  <button onclick="continueApp()">Continue</button>`;
+}
+
+function copyID(){
+  navigator.clipboard.writeText(currentUserId);
+  alert("Copied!");
+}
+
+function continueApp(){ showApp(); }
+
+function enterID(){
+  let id=userIdInput.value.trim();
+  if(!id) return alert("Enter ID");
+
+  currentUserId=id;
+  localStorage.setItem("userId",id);
+  showApp();
+}
+
+function logout(){
+  localStorage.removeItem("userId");
+  location.reload();
+}
+
+function showApp(){
+  idPage.style.display="none";
+  app.style.display="flex";
+  loadAssets();
+  loadReceipts();
+}
+
+function showPage(p){
+  dashboardPage.style.display="none";
+  assetsPage.style.display="none";
+  receiptsPage.style.display="none";
+  document.getElementById(p+"Page").style.display="block";
+}
+
+// ADD ASSET
+async function addAsset(){
+  await client.from("assets").insert([{
+    name:assetName.value,
+    tenant:tenantName.value,
+    amount:amount.value,
+    user_id:currentUserId
+  }]);
+  loadAssets();
+}
+
+// LOAD ASSETS
+async function loadAssets(){
+  let {data}=await client.from("assets").select("*");
+
+  let html="";
+  data.forEach(a=>{
+    if(a.user_id!==currentUserId) return;
+
+    html+=`
+    <div class="card">
+      <b>${a.name}</b><br>
+      ${a.tenant} • ₹${a.amount}<br>
+
+      <input type="month" id="m${a.id}">
+      <input type="date" id="d${a.id}">
+
+      <button onclick="collect('${a.id}','${a.name}','${a.tenant}',${a.amount})">
+        Collect
+      </button>
+    </div>`;
+  });
+
+  assets.innerHTML=html;
+}
+
+// COLLECT
+async function collect(id,name,tenant,amount){
+  let month=document.getElementById("m"+id).value;
+  let date=document.getElementById("d"+id).value;
+
+  if(!month || !date){
+    alert("Select month & date");
+    return;
+  }
+
+  await client.from("receipts").insert([{
+    asset_name:name,
+    tenant:tenant,
+    amount:amount,
+    month:month,
+    date:date,
+    user_id:currentUserId
+  }]);
+
+  generatePDF(name,tenant,amount,month,date);
+  loadReceipts();
+}
+
+// 🔥 GST STYLE PDF
+function generatePDF(asset, tenant, amount, month, date){
+  const { jsPDF } = window.jspdf;
+  let doc = new jsPDF();
+
+  let invoiceNo = "INV-" + Date.now().toString().slice(-6);
+  let qrData = `${invoiceNo}|${tenant}|${asset}|${amount}|${month}`;
+
+  QRCode.toDataURL(qrData, function(err, url){
+
+    doc.setFillColor(37, 99, 235);
+    doc.rect(0, 0, 210, 30, "F");
+
+    doc.setTextColor(255,255,255);
+    doc.setFontSize(18);
+    doc.text("RENT INVOICE", 75, 18);
+
+    doc.setTextColor(0,0,0);
+
+    doc.setFontSize(12);
+    doc.text("Your Company Name", 20, 40);
+    doc.setFontSize(10);
+    doc.text("Address Line 1", 20, 46);
+    doc.text("City, Gujarat, India", 20, 52);
+    doc.text("GSTIN: XXXXXXXX", 20, 58);
+
+    doc.rect(140, 40, 50, 30);
+    doc.setFontSize(10);
+    doc.text("Invoice No:", 142, 48);
+    doc.text(invoiceNo, 142, 54);
+    doc.text("Date:", 142, 62);
+    doc.text(date, 142, 68);
+
+    doc.setFontSize(12);
+    doc.text("Bill To:", 20, 75);
+    doc.setFontSize(11);
+    doc.text(tenant, 20, 82);
+
+    doc.setFillColor(220, 230, 255);
+    doc.rect(20, 95, 170, 10, "F");
+
+    doc.setFontSize(11);
+    doc.text("Description", 22, 102);
+    doc.text("Amount (₹)", 150, 102);
+
+    doc.rect(20, 105, 170, 15);
+    doc.text(`Rent for ${asset} (${month})`, 22, 115);
+    doc.text(amount.toString(), 150, 115);
+
+    doc.setFillColor(240, 240, 240);
+    doc.rect(120, 125, 70, 15, "F");
+
+    doc.setFontSize(12);
+    doc.text("Total: ₹ " + amount, 125, 135);
+
+    doc.addImage(url, "PNG", 20, 125, 40, 40);
+
+    doc.setFontSize(10);
+    doc.text("Thank you for your business!", 20, 170);
+
+    doc.text("Authorized Signature", 140, 170);
+    doc.line(140, 165, 190, 165);
+
+    doc.save(`invoice_${invoiceNo}.pdf`);
+  });
+}
+
+// LOAD RECEIPTS
+async function loadReceipts(){
+  let {data}=await client.from("receipts").select("*");
+
+  let total=0;
+  let map={};
+  let html="";
+
+  data.forEach(r=>{
+    if(r.user_id!==currentUserId) return;
+
+    total+=Number(r.amount);
+    map[r.month]=(map[r.month]||0)+Number(r.amount);
+
+    html+=`
+      <div class="card">
+        ${r.tenant} | ${r.asset_name} | ₹${r.amount} | ${r.month}
+      </div>`;
+  });
+
+  receipts.innerHTML=html;
+  totalIncome.innerText="₹"+total;
+
+  drawChart(map);
+}
+
+// FILTER
+function filterReceipts(){
+  let t=searchTenant.value.toLowerCase();
+  let m=filterMonth.value;
+
+  document.querySelectorAll("#receipts .card").forEach(c=>{
+    let txt=c.innerText.toLowerCase();
+    c.style.display=
+      (!t||txt.includes(t)) &&
+      (!m||txt.includes(m)) ? "block":"none";
+  });
+}
+
+// CHART
+function drawChart(map){
+  new Chart(chart,{
+    type:'bar',
+    data:{
+      labels:Object.keys(map),
+      datasets:[{label:"Income",data:Object.values(map)}]
+    }
+  });
+}
+
+// EXCEL
+async function exportExcel(){
+  let {data}=await client.from("receipts").select("*");
+
+  let filtered=data.filter(r=>r.user_id===currentUserId);
+
+  let ws=XLSX.utils.json_to_sheet(filtered);
+  let wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,"Receipts");
+
+  XLSX.writeFile(wb,"rent_data.xlsx");
+}
+
+// DARK MODE
+function toggleDark(){
+  document.body.classList.toggle("dark");
+}
+
+// AUTO LOGIN
+let saved=localStorage.getItem("userId");
+if(saved){
+  currentUserId=saved;
+  showApp();
+}
+
+</script>
+
+</body>
+</html>
